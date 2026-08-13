@@ -24,4 +24,47 @@ def scan_port(host,port):
 
     sock.close()
 
-scan_port("127.0.0.1", 80)
+def parse_ports(ports_text):
+    ports = []
+
+    for item in ports_text.split(","):
+        item = item.strip()
+
+        if not item:
+            continue
+
+        if "-" in item: # 扫描1-100
+            start, end = item.split("-")
+
+            start = int(start)
+            end = int(end)
+
+            if start > end : 
+                raise ValueError("start port cannot be greater than end port")
+            if start < 1 or end > 65535:
+                raise ValueError("port must be between 1 and 65535")
+            
+            for port in range(start, end+1):
+                ports.append(port)
+
+        else:
+            port = int(item)
+
+            if port < 1 or port > 65535:
+                 raise ValueError("port must be between 1 and 65535")
+            ports.append(port)
+
+    return ports
+
+
+host = input("host: ").strip()
+ports_text = input("ports: ")
+
+try:
+    ports = parse_ports(ports_text)
+
+    for port in ports:
+        scan_port(host, port)
+
+except ValueError as e:
+    print(f"[!] Invalid port input: {e}")
