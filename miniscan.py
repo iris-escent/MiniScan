@@ -4,6 +4,21 @@ import os
 import time #计时器
 from concurrent.futures import ThreadPoolExecutor, as_completed #高级并发模块-异步任务-线程池类
 import argparse #命令行参数解析
+import ipaddress  #处理 IP 和网络地址
+
+
+#解析ip地址
+def parse_hosts(host_text):
+    host_text = host_text.strip()
+    if '/' in host_text:
+        network = ipaddress.IPv4Network(host_text,strict=False) #一个CIDR网络对象
+        hosts = []
+        for host in network.hosts(): #所有可用ip地址
+            hosts.append(str(host))
+
+        return hosts
+    ip = ipaddress.IPv4Address(host_text)
+    return [str(ip)]
 
 #端口扫描
 def scan_port(host,port,timeout):
@@ -59,6 +74,8 @@ def parse_ports(ports_text):
 
     return ports
 
+
+
 #输入
 parser = argparse.ArgumentParser( #创建参数解析器对象的构造函数
     description="MiniScan - A lightweight TCP port scanner"
@@ -90,7 +107,10 @@ parser.add_argument(
 )
 
 args = parser.parse_args()
-host = args.host
+try:
+    hosts = parse_hosts(args.host)
+except ValueError as e:
+    parser.error(f"invalid host or CIDR: {e}")
 ports_text = args.ports
 workers = args.threads
 timeout = args.timeout
@@ -103,26 +123,42 @@ if timeout <=0:
 
 try:
     ports = parse_ports(ports_text)
+
+    # 添加扫描摘要
+    total_tasks = len(hosts)*len(ports)
+
+    print("[*] MiniScan starting...")
+    print(f"[*] Targets : {len(hosts)}")
+    print(f"[*] Ports   : {len(ports)}")
+    print(f"[*] Tasks   : {total_tasks}")
+    print(f"[*] Threads : {workers}")
+    print(f"[*] Timeout : {timeout}s")
+    print()
+
     start_time = time.perf_counter()  #获取时间戳，测试短时间内代码性能
 
     results = []
     with ThreadPoolExecutor(max_workers=workers) as executor:
         futures = []
         #提交任务
-        for port in ports:
-            future = executor.submit(
-                scan_port,
-                host,
-                port,
-                timeout
-            ) #submit 把scan_portree任务交给executor
-            futures.append(future)
+        for host in hosts:
+            for port in ports:
+                future = executor.submit(
+                    scan_port,
+                    host,
+                    port,
+                    timeout
+                ) #submit 把scan_portree任务交给executor
+                futures.append(future)
         #收集结果
         for future in as_completed(futures):
             results.append(future.result())
 
     # 输出结果
-    results.sort(key=lambda x: x["port"]) #最终输出的时候按端口号排列
+    results.sort(key=lambda x:(
+                ipaddress.ip_address(x["host"]),
+                 x["port"]
+                 ) )#最终输出的时候按端口号排列
     for result in results:
         if result["status"] == "open":
             print(f"[+] {result["host"]}:{result["port"]} open")
@@ -134,3 +170,4 @@ try:
 
 except ValueError as e:
     print(f"[!] Invalid port input: {e}")
+
