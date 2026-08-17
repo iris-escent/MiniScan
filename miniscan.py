@@ -7,6 +7,24 @@ import argparse #命令行参数解析
 import ipaddress  #处理 IP 和网络地址
 
 
+#常见服务字典
+COMMON_SERVICES = {
+    21: "ftp",
+    22: "ssh",
+    23: "telnet",
+    25: "smtp",
+    53: "dns",
+    80: "http",
+    110: "pop3",
+    143: "imap",
+    443: "https",
+    445: "smb",
+    3306: "mysql",
+    3389: "rdp",
+    5432: "postgresql",
+    6379: "redis",
+}
+
 #解析ip地址
 def parse_hosts(host_text):
     host_text = host_text.strip()
@@ -24,10 +42,10 @@ def parse_hosts(host_text):
 def scan_port(host,port,timeout):
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM) 
-    #使用socket 模块的 socket 类，使用 IPv4 地址，TCP 协议
+    #socket 模块的 socket 类，使用 IPv4 地址，TCP 协议
     sock.settimeout(timeout) 
     result = sock.connect_ex((host, port)) 
-    #非阻塞式的连接函数，尝试连接远程服务器 TCP三次握手,错误返回错误码
+    #非阻塞式连接函数，尝试连接远程服务器 TCP三次握手,错误返回错误码
     sock.close()
 
     if result == 0:
@@ -74,100 +92,166 @@ def parse_ports(ports_text):
 
     return ports
 
+#识别常见服务
+def identify_service(port):
+    return COMMON_SERVICES.get(port, "unknown")
+
+# 获取服务类型
+def grab_banner(host, port, timeout):
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.settimeout(timeout)
+
+    try:
+        sock.connect((host,port))
+        banner = sock.recv(1024) #拿前1024字节数据
+        return banner.decode(
+            errors="ignore"
+        ).strip()
+    except (socket.timeout, OSError):
+        return None
+
+    finally:
+        sock.close()
 
 
-#输入
-parser = argparse.ArgumentParser( #创建参数解析器对象的构造函数
-    description="MiniScan - A lightweight TCP port scanner"
+
+#http探测
+def probe_http(host,port,timeout):
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.settimeout(timeout)
+
+    try:
+        sock.connect((host,port))
+        request = (
+            f"GET / HTTP/1.0\r\n"
+            f"Host: {host}\r\n"
+            f"\r\n"
+        )
+        sock.sendall(request.encode())
+        #返回字典
+        response = sock.recv(4096).decode(errors="ignore")
+        lines = response.split("\r\n")
+        status_line = lines[0]
+        server = None
+        for line in lines:
+            if line.lower().startswith("server: "):
+                server = line.split(":", 1)[1].strip() #返回web服务器协议
+
+        return {
+            "service": "http",
+            "status_line": status_line,
+            "server": server
+        }
+
+    except (socket.timeout, OSError) :
+        return None
+
+    finally:
+        sock.close()
+
+response = probe_http(
+    "127.0.0.1",
+    8000,
+    1
 )
-parser.add_argument(
-    "-H",
-    "--host",
-    required=True,
-    help="Target host"
-)
-parser.add_argument(
-    "-p",
-    "--ports",
-    required=True,
-    help="Ports, e.g. 80,443 or 1-1000"
-)
-parser.add_argument(
-    "-t",
-    "--threads",
-    type=int, #自动类型转化
-    default=50,
-    help="Number of worker threads, default: 50"
-)
-parser.add_argument(
-    "--timeout",
-    type=float, #自动类型转化
-    default=1.0,
-    help="Connection timeout in seconds, default: 1.0"
-)
 
-args = parser.parse_args()
-try:
-    hosts = parse_hosts(args.host)
-except ValueError as e:
-    parser.error(f"invalid host or CIDR: {e}")
-ports_text = args.ports
-workers = args.threads
-timeout = args.timeout
+print(response)
 
-#输入检查
-if  workers < 1 or workers > 500:
-    parser.error("threads must be between 1 and 500")
-if timeout <=0:
-    parser.error("timeout must be greater than 0")
 
-try:
-    ports = parse_ports(ports_text)
+# #输入
+# parser = argparse.ArgumentParser( #创建参数解析器对象的构造函数
+#     description="MiniScan - A lightweight TCP port scanner"
+# )
+# parser.add_argument(
+#     "-H",
+#     "--host",
+#     required=True,
+#     help="Target host"
+# )
+# parser.add_argument(
+#     "-p",
+#     "--ports",
+#     required=True,
+#     help="Ports, e.g. 80,443 or 1-1000"
+# )
+# parser.add_argument(
+#     "-t",
+#     "--threads",
+#     type=int, #自动类型转化
+#     default=50,
+#     help="Number of worker threads, default: 50"
+# )
+# parser.add_argument(
+#     "--timeout",
+#     type=float, 
+#     default=1.0,
+#     help="Connection timeout in seconds, default: 1.0"
+# )
 
-    # 添加扫描摘要
-    total_tasks = len(hosts)*len(ports)
+# args = parser.parse_args()
+# try:
+#     hosts = parse_hosts(args.host)
+# except ValueError as e:
+#     parser.error(f"invalid host or CIDR: {e}")
+# ports_text = args.ports
+# workers = args.threads
+# timeout = args.timeout
 
-    print("[*] MiniScan starting...")
-    print(f"[*] Targets : {len(hosts)}")
-    print(f"[*] Ports   : {len(ports)}")
-    print(f"[*] Tasks   : {total_tasks}")
-    print(f"[*] Threads : {workers}")
-    print(f"[*] Timeout : {timeout}s")
-    print()
+# #输入检查
+# if  workers < 1 or workers > 500:
+#     parser.error("threads must be between 1 and 500")
+# if timeout <=0:
+#     parser.error("timeout must be greater than 0")
 
-    start_time = time.perf_counter()  #获取时间戳，测试短时间内代码性能
+# try:
+#     ports = parse_ports(ports_text)
 
-    results = []
-    with ThreadPoolExecutor(max_workers=workers) as executor:
-        futures = []
-        #提交任务
-        for host in hosts:
-            for port in ports:
-                future = executor.submit(
-                    scan_port,
-                    host,
-                    port,
-                    timeout
-                ) #submit 把scan_portree任务交给executor
-                futures.append(future)
-        #收集结果
-        for future in as_completed(futures):
-            results.append(future.result())
+#     # 添加扫描摘要
+#     total_tasks = len(hosts)*len(ports)
+#     print("[*] MiniScan starting...")
+#     print(f"[*] Targets : {len(hosts)}")
+#     print(f"[*] Ports   : {len(ports)}")
+#     print(f"[*] Tasks   : {total_tasks}")
+#     print(f"[*] Threads : {workers}")
+#     print(f"[*] Timeout : {timeout}s")
+#     print()
 
-    # 输出结果
-    results.sort(key=lambda x:(
-                ipaddress.ip_address(x["host"]),
-                 x["port"]
-                 ) )#最终输出的时候按端口号排列
-    for result in results:
-        if result["status"] == "open":
-            print(f"[+] {result["host"]}:{result["port"]} open")
-        else:
-            print(f"[-] {result["host"]}:{result["port"]} not open")
 
-    end_time = time.perf_counter()
-    print(f"[*]  Scan finished in {end_time - start_time:.2f} seconds")
+#     start_time = time.perf_counter()  #获取时间戳，测试短时间内代码性能
 
-except ValueError as e:
-    print(f"[!] Invalid port input: {e}")
+#     results = []
+#     with ThreadPoolExecutor(max_workers=workers) as executor:
+#         futures = []
+#         #提交任务
+#         for host in hosts:
+#             for port in ports:
+#                 future = executor.submit(
+#                     scan_port,
+#                     host,
+#                     port,
+#                     timeout
+#                 ) #submit 把scan_portree任务交给executor
+#                 futures.append(future)
+#         #收集结果
+#         for future in as_completed(futures):
+#             results.append(future.result())
+
+#     # 输出结果
+#     results.sort(key=lambda x:(
+#                 ipaddress.ip_address(x["host"]),
+#                  x["port"]
+#                  ) )#最终输出的时候按端口号排列
+#     for result in results:
+#         if result["status"] == "open":
+#             print(f"[+] {result["host"]}:{result["port"]} "
+#                   f"open {result["service"]}"
+#                 )
+#         else:
+#             print(f"[-] {result["host"]}:{result["port"]} not open")
+
+#     end_time = time.perf_counter()
+#     print(f"[*]  Scan finished in {end_time - start_time:.2f} seconds")
+
+# except ValueError as e:
+#     print(f"[!] Invalid port input: {e}")
 
