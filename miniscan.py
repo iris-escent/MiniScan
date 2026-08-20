@@ -5,6 +5,8 @@ import time #计时器
 from concurrent.futures import ThreadPoolExecutor, as_completed #高级并发模块-异步任务-线程池类
 import argparse #命令行参数解析
 import ipaddress  #处理 IP 和网络地址
+import re #正则
+import html
 
 
 #常见服务字典
@@ -128,10 +130,22 @@ def probe_http(host,port,timeout):
             f"\r\n"
         )
         sock.sendall(request.encode())
-        #返回字典
-        response = sock.recv(4096).decode(errors="ignore")
+        #拼接tcp字节流
+        chunks = []
+
+        while True:
+            data = sock.recv(4096)
+
+            if not data:
+                break
+            chunks.append(data)
+        response = b"".join(chunks).decode(errors="ignore")
+
         lines = response.split("\r\n")
         status_line = lines[0]
+        parts = status_line.split()
+        status_code = int(parts[1])
+
         if not status_line.startswith("HTTP/"):
             return None
         server = None
@@ -139,10 +153,23 @@ def probe_http(host,port,timeout):
             if line.lower().startswith("server:"):
                 server = line.split(":", 1)[1].strip() #返回web服务器协议
 
+        title = None
+        match = re.search(
+            r"<title[^>]*>(.*?)</title>",
+            response,
+            re.IGNORECASE | re.DOTALL
+        )
+        if match:
+            title = match.group(1).strip()
+            title = " ".join(title.split()) #处理空格
+            title = html.unescape(title) #处理html实体
+
+
         return {
             "service": "http",
-            "status_line": status_line,
-            "server": server
+            "status_code": status_code,
+            "server": server,
+            "title": title
         }
 
     except (socket.timeout, OSError) :
@@ -150,6 +177,8 @@ def probe_http(host,port,timeout):
 
     finally:
         sock.close()
+
+
 
 def detect_service(host, port, timeout):
     #初步猜测
@@ -283,7 +312,7 @@ try:
                 ipaddress.ip_address(x["host"]),
                  x["port"]
                  ) )
-    #
+    # 补充info
     for result in results:
         if result["status"] == "open":
             service_info = detect_service(result["host"], result["port"], timeout)
@@ -298,16 +327,22 @@ try:
             if result["banner"]:
                 print(f'    Banner: {result["banner"]}')
             if result["detail"]:
-                if result["detail"].get("status_line"):
+                if result["detail"].get("status_code"):
                     print(
                         f'    Status: '
-                        f'{result["detail"]["status_line"]}'
+                        f'{result["detail"]["status_code"]}'
                     )
 
                 if result["detail"].get("server"):
                     print(
                         f'    Server: '
                         f'{result["detail"]["server"]}'
+                    )
+
+                if result["detail"].get("title"):
+                    print(
+                        f'    Title: '
+                        f'{result["detail"]["title"]}'
                     )
 
         else:
