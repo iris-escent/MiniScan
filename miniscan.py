@@ -45,7 +45,7 @@ def scan_port(host,port,timeout):
     #socket 模块的 socket 类，使用 IPv4 地址，TCP 协议
     sock.settimeout(timeout) 
     result = sock.connect_ex((host, port)) 
-    #非阻塞式连接函数，尝试连接远程服务器 TCP三次握手,错误返回错误码
+    #尝试连接远程服务器 TCP三次握手,错误返回错误码
     sock.close()
 
     if result == 0:
@@ -132,9 +132,11 @@ def probe_http(host,port,timeout):
         response = sock.recv(4096).decode(errors="ignore")
         lines = response.split("\r\n")
         status_line = lines[0]
+        if not status_line.startswith("HTTP/"):
+            return None
         server = None
         for line in lines:
-            if line.lower().startswith("server: "):
+            if line.lower().startswith("server:"):
                 server = line.split(":", 1)[1].strip() #返回web服务器协议
 
         return {
@@ -149,109 +151,171 @@ def probe_http(host,port,timeout):
     finally:
         sock.close()
 
-response = probe_http(
-    "127.0.0.1",
-    8000,
-    1
+def detect_service(host, port, timeout):
+    #初步猜测
+    service_hint = identify_service(port)
+
+    #ssh
+    if service_hint == "ssh":
+        banner = grab_banner(host, port, timeout)
+        if banner:
+            if banner.startswith("SSH-"):
+                return {
+                    "service": "ssh",
+                    "banner": banner,
+                    "detail": {}
+                }
+    #http
+    if service_hint == "http":
+        http_info = probe_http(host, port, timeout)
+        if http_info is not None:
+            return {
+                        "service": "http",
+                        "banner": None,
+                        "detail": http_info
+                        }
+    #非标准端口：优先尝试http
+    http_info = probe_http(host, port, timeout)
+
+    if http_info is not None:
+        return {
+                    "service": "http",
+                    "banner": None,
+                    "detail": http_info
+                    }
+    banner = grab_banner(host, port, timeout)
+
+    if banner and banner.startswith("SSH-"):
+        return{
+                "service": "ssh",
+                "banner": banner,
+                "detail": {}
+        }
+    #ssh和http都不成功 返回初始端口映射结果
+    return {
+        "service": service_hint,
+        "banner": banner,
+        "detail": {}
+    }
+
+
+
+#输入
+parser = argparse.ArgumentParser( #创建参数解析器对象的构造函数
+    description="MiniScan - A lightweight TCP port scanner"
+)
+parser.add_argument(
+    "-H",
+    "--host",
+    required=True,
+    help="Target host"
+)
+parser.add_argument(
+    "-p",
+    "--ports",
+    required=True,
+    help="Ports, e.g. 80,443 or 1-1000"
+)
+parser.add_argument(
+    "-t",
+    "--threads",
+    type=int, #自动类型转化
+    default=50,
+    help="Number of worker threads, default: 50"
+)
+parser.add_argument(
+    "--timeout",
+    type=float, 
+    default=1.0,
+    help="Connection timeout in seconds, default: 1.0"
 )
 
-print(response)
+args = parser.parse_args()
+try:
+    hosts = parse_hosts(args.host)
+except ValueError as e:
+    parser.error(f"invalid host or CIDR: {e}")
+ports_text = args.ports
+workers = args.threads
+timeout = args.timeout
+
+#输入检查
+if  workers < 1 or workers > 500:
+    parser.error("threads must be between 1 and 500")
+if timeout <=0:
+    parser.error("timeout must be greater than 0")
+
+try:
+    ports = parse_ports(ports_text)
+
+    # 添加扫描摘要
+    total_tasks = len(hosts)*len(ports)
+    print("[*] MiniScan starting...")
+    print(f"[*] Targets : {len(hosts)}")
+    print(f"[*] Ports   : {len(ports)}")
+    print(f"[*] Tasks   : {total_tasks}")
+    print(f"[*] Threads : {workers}")
+    print(f"[*] Timeout : {timeout}s")
+    print()
 
 
-# #输入
-# parser = argparse.ArgumentParser( #创建参数解析器对象的构造函数
-#     description="MiniScan - A lightweight TCP port scanner"
-# )
-# parser.add_argument(
-#     "-H",
-#     "--host",
-#     required=True,
-#     help="Target host"
-# )
-# parser.add_argument(
-#     "-p",
-#     "--ports",
-#     required=True,
-#     help="Ports, e.g. 80,443 or 1-1000"
-# )
-# parser.add_argument(
-#     "-t",
-#     "--threads",
-#     type=int, #自动类型转化
-#     default=50,
-#     help="Number of worker threads, default: 50"
-# )
-# parser.add_argument(
-#     "--timeout",
-#     type=float, 
-#     default=1.0,
-#     help="Connection timeout in seconds, default: 1.0"
-# )
+    start_time = time.perf_counter()  #获取时间戳，测试短时间内代码性能
 
-# args = parser.parse_args()
-# try:
-#     hosts = parse_hosts(args.host)
-# except ValueError as e:
-#     parser.error(f"invalid host or CIDR: {e}")
-# ports_text = args.ports
-# workers = args.threads
-# timeout = args.timeout
+    results = []
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        futures = []
+        #提交任务
+        for host in hosts:
+            for port in ports:
+                future = executor.submit(
+                    scan_port,
+                    host,
+                    port,
+                    timeout
+                ) #submit 把scan_portree任务交给executor
+                futures.append(future)
+        #收集结果
+        for future in as_completed(futures):
+            results.append(future.result())
 
-# #输入检查
-# if  workers < 1 or workers > 500:
-#     parser.error("threads must be between 1 and 500")
-# if timeout <=0:
-#     parser.error("timeout must be greater than 0")
+    # 排序
+    results.sort(key=lambda x:(
+                ipaddress.ip_address(x["host"]),
+                 x["port"]
+                 ) )
+    #
+    for result in results:
+        if result["status"] == "open":
+            service_info = detect_service(result["host"], result["port"], timeout)
+            result.update(service_info) #合并结果
 
-# try:
-#     ports = parse_ports(ports_text)
+    # 打印
+    for result in results:
+        if result["status"] == "open":
+            print(f"[+] {result["host"]}:{result["port"]} "
+                  f"open {result["service"]}"
+                )
+            if result["banner"]:
+                print(f'    Banner: {result["banner"]}')
+            if result["detail"]:
+                if result["detail"].get("status_line"):
+                    print(
+                        f'    Status: '
+                        f'{result["detail"]["status_line"]}'
+                    )
 
-#     # 添加扫描摘要
-#     total_tasks = len(hosts)*len(ports)
-#     print("[*] MiniScan starting...")
-#     print(f"[*] Targets : {len(hosts)}")
-#     print(f"[*] Ports   : {len(ports)}")
-#     print(f"[*] Tasks   : {total_tasks}")
-#     print(f"[*] Threads : {workers}")
-#     print(f"[*] Timeout : {timeout}s")
-#     print()
+                if result["detail"].get("server"):
+                    print(
+                        f'    Server: '
+                        f'{result["detail"]["server"]}'
+                    )
 
+        else:
+            print(f"[-] {result["host"]}:{result["port"]} not open")
 
-#     start_time = time.perf_counter()  #获取时间戳，测试短时间内代码性能
+    end_time = time.perf_counter()
+    print(f"[*]  Scan finished in {end_time - start_time:.2f} seconds")
 
-#     results = []
-#     with ThreadPoolExecutor(max_workers=workers) as executor:
-#         futures = []
-#         #提交任务
-#         for host in hosts:
-#             for port in ports:
-#                 future = executor.submit(
-#                     scan_port,
-#                     host,
-#                     port,
-#                     timeout
-#                 ) #submit 把scan_portree任务交给executor
-#                 futures.append(future)
-#         #收集结果
-#         for future in as_completed(futures):
-#             results.append(future.result())
-
-#     # 输出结果
-#     results.sort(key=lambda x:(
-#                 ipaddress.ip_address(x["host"]),
-#                  x["port"]
-#                  ) )#最终输出的时候按端口号排列
-#     for result in results:
-#         if result["status"] == "open":
-#             print(f"[+] {result["host"]}:{result["port"]} "
-#                   f"open {result["service"]}"
-#                 )
-#         else:
-#             print(f"[-] {result["host"]}:{result["port"]} not open")
-
-#     end_time = time.perf_counter()
-#     print(f"[*]  Scan finished in {end_time - start_time:.2f} seconds")
-
-# except ValueError as e:
-#     print(f"[!] Invalid port input: {e}")
+except ValueError as e:
+    print(f"[!] Invalid port input: {e}")
 
