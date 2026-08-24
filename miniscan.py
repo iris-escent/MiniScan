@@ -7,6 +7,7 @@ import argparse #命令行参数解析
 import ipaddress  #处理 IP 和网络地址
 import re #正则
 import html
+import ssl  # SSL/TLS模块
 
 
 #常见服务字典
@@ -109,13 +110,48 @@ def grab_banner(host, port, timeout):
         return banner.decode(
             errors="ignore"
         ).strip()
-    except (socket.timeout, OSError):
+    except (socket.timeout, OSError, ssl.SSLError):
         return None
 
     finally:
         sock.close()
 
+# 解析http响应
+def parse_http_response(response):
 
+    lines = response.split("\r\n")
+    status_line = lines[0]
+
+    if not status_line.startswith("HTTP/"):
+        return None
+
+    parts = status_line.split()
+    status_code = int(parts[1])
+
+    server = None
+    for line in lines:
+        if line.lower().startswith("server:"):
+            server = line.split(":", 1)[1].strip()
+
+    title = None
+    match = re.search(
+        r"<title[^>]*>(.*?)</title>",
+        response,
+        re.IGNORECASE | re.DOTALL
+    )
+
+    if match:
+        title = match.group(1).strip()
+        title = " ".join(title.split())
+        title = html.unescape(title)
+
+
+    return {
+        "service": "http",
+        "status_code": status_code,
+        "server": server,
+        "title": title
+    }
 
 #http探测
 def probe_http(host,port,timeout):
@@ -132,7 +168,6 @@ def probe_http(host,port,timeout):
         sock.sendall(request.encode())
         #拼接tcp字节流
         chunks = []
-
         while True:
             data = sock.recv(4096)
 
@@ -141,36 +176,7 @@ def probe_http(host,port,timeout):
             chunks.append(data)
         response = b"".join(chunks).decode(errors="ignore")
 
-        lines = response.split("\r\n")
-        status_line = lines[0]
-        parts = status_line.split()
-        status_code = int(parts[1])
-
-        if not status_line.startswith("HTTP/"):
-            return None
-        server = None
-        for line in lines:
-            if line.lower().startswith("server:"):
-                server = line.split(":", 1)[1].strip() #返回web服务器协议
-
-        title = None
-        match = re.search(
-            r"<title[^>]*>(.*?)</title>",
-            response,
-            re.IGNORECASE | re.DOTALL
-        )
-        if match:
-            title = match.group(1).strip()
-            title = " ".join(title.split()) #处理空格
-            title = html.unescape(title) #处理html实体
-
-
-        return {
-            "service": "http",
-            "status_code": status_code,
-            "server": server,
-            "title": title
-        }
+        return parse_http_response(response)
 
     except (socket.timeout, OSError) :
         return None
@@ -178,6 +184,43 @@ def probe_http(host,port,timeout):
     finally:
         sock.close()
 
+#https探测
+def probe_https(host,port,timeout):
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.settimeout(timeout)
+
+    try:
+        sock.connect((host,port))
+        context = ssl.create_default_context()  #创建TLS配置
+        context.check_hostname = False  #不验证主机名
+        context.verify_mode = ssl.CERT_NONE #不验证证书
+
+        tls_sock = context.wrap_socket(sock, server_hostname=host)
+
+        request = (
+            f"GET / HTTP/1.0\r\n"
+            f"Host: {host}\r\n"
+            f"\r\n"
+        )
+
+        tls_sock.sendall(request.encode())
+        #拼接tcp字节流
+        chunks = []
+
+        while True:
+            data = tls_sock.recv(4096)
+
+            if not data:
+                break
+            chunks.append(data)
+        response = b"".join(chunks).decode(errors="ignore")
+        return parse_http_response(response)
+
+    except (socket.timeout, OSError) :
+        return None
+
+    finally:
+        sock.close()
 
 
 def detect_service(host, port, timeout):
@@ -193,8 +236,19 @@ def detect_service(host, port, timeout):
                     "service": "ssh",
                     "banner": banner,
                     "detail": {}
-                }
-    #http
+                 }
+
+     #https
+    if service_hint == "https":
+        https_info = probe_https(host,port,timeout)
+        if https_info is not None:
+            return {
+                "service": "https",
+                "banner": None,
+                "detail": https_info
+            }
+
+     #http
     if service_hint == "http":
         http_info = probe_http(host, port, timeout)
         if http_info is not None:
@@ -203,31 +257,44 @@ def detect_service(host, port, timeout):
                         "banner": None,
                         "detail": http_info
                         }
-    #非标准端口：优先尝试http
-    http_info = probe_http(host, port, timeout)
+    
+    #非标准端口：->http ->https -> banner ->最初结果 做快速指纹探测
+   
 
+    http_info = probe_http(host, port, timeout)
     if http_info is not None:
         return {
                     "service": "http",
                     "banner": None,
                     "detail": http_info
                     }
+        
+    https_info = probe_https(
+        host,
+        port,
+        timeout
+    )
+    if https_info:
+        return {
+            "service": "https",
+            "banner": None,
+            "detail": https_info
+        }
+    
     banner = grab_banner(host, port, timeout)
-
     if banner and banner.startswith("SSH-"):
         return{
                 "service": "ssh",
                 "banner": banner,
                 "detail": {}
         }
-    #ssh和http都不成功 返回初始端口映射结果
+    
+    #全部失败 返回初始端口映射结果
     return {
         "service": service_hint,
         "banner": banner,
         "detail": {}
     }
-
-
 
 #输入
 parser = argparse.ArgumentParser( #创建参数解析器对象的构造函数
