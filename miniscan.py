@@ -9,6 +9,16 @@ import re #正则
 import html
 import ssl  # SSL/TLS模块
 import json 
+import logging
+
+
+#设置日志
+logging.basicConfig(
+    level=logging.INFO, # 设置日志级别
+    format="%(levelname)s: %(message)s",  #设置日志格式
+)
+logger = logging.getLogger("MiniScan") #创建日志器
+
 
 #常见服务字典
 COMMON_SERVICES = {
@@ -295,6 +305,38 @@ def detect_service(host, port, timeout):
         "detail": {}
     }
 
+def print_result(results):
+    # 打印结果
+    for result in results:
+        if result["status"] == "open":
+            print(f"[+] {result["host"]}:{result["port"]} "
+                f"open {result["service"]}"
+                )
+            if result["banner"]:
+                print(f'    Banner: {result["banner"]}')
+            if result["detail"]:
+                if result["detail"].get("status_code"):
+                    print(
+                        f'    Status: '
+                        f'{result["detail"]["status_code"]}'
+                    )
+
+                if result["detail"].get("server"):
+                    print(
+                        f'    Server: '
+                        f'{result["detail"]["server"]}'
+                    )
+
+                if result["detail"].get("title"):
+                    print(
+                        f'    Title: '
+                        f'{result["detail"]["title"]}'
+                    )
+
+        else:
+            print(f"[-] {result["host"]}:{result["port"]} not open")
+
+
 #输入
 parser = argparse.ArgumentParser( #创建参数解析器对象的构造函数
     description="MiniScan - A lightweight TCP port scanner"
@@ -329,8 +371,19 @@ parser.add_argument(
     "--output",
     help="save result to json file"
 )
+parser.add_argument(
+    "-v",
+    "--verbose", #控制输出信息的详细程度
+    action="store_true",  # 动作类型：存储布尔值
+    help="show detailed information"
+)
 
 args = parser.parse_args()
+if args.verbose :
+    logger.setLevel(logging.DEBUG)
+else:
+    logger.setLevel(logging.INFO)
+
 try:
     hosts = parse_hosts(args.host)
 except ValueError as e:
@@ -338,6 +391,7 @@ except ValueError as e:
 ports_text = args.ports
 workers = args.threads
 timeout = args.timeout
+verbose = args.verbose
 
 #输入检查
 if  workers < 1 or workers > 500:
@@ -350,12 +404,12 @@ try:
 
     # 添加扫描摘要
     total_tasks = len(hosts)*len(ports)
-    print("[*] MiniScan starting...")
-    print(f"[*] Targets : {len(hosts)}")
-    print(f"[*] Ports   : {len(ports)}")
-    print(f"[*] Tasks   : {total_tasks}")
-    print(f"[*] Threads : {workers}")
-    print(f"[*] Timeout : {timeout}s")
+    logging.info("MiniScan starting...")
+    logging.info(f"Targets : {len(hosts)}")
+    logging.info(f"Ports   : {len(ports)}")
+    logging.info(f"Tasks   : {total_tasks}")
+    logging.info(f"Threads : {workers}")
+    logging.info(f"Timeout : {timeout}s")
     print()
 
 
@@ -367,6 +421,9 @@ try:
         #提交任务
         for host in hosts:
             for port in ports:
+                logger.debug(
+                   f"submit scan task {host}:{port}"
+                )
                 future = executor.submit(
                     scan_port,
                     host,
@@ -385,42 +442,17 @@ try:
                  ) )
     # 补充info
     for result in results:
+        logger.debug(
+            f"detect service {result['host']}:{result['port']}"
+        )
         if result["status"] == "open":
             service_info = detect_service(result["host"], result["port"], timeout)
             result.update(service_info) #合并结果
 
-    # 打印结果
-    for result in results:
-        if result["status"] == "open":
-            print(f"[+] {result["host"]}:{result["port"]} "
-                  f"open {result["service"]}"
-                )
-            if result["banner"]:
-                print(f'    Banner: {result["banner"]}')
-            if result["detail"]:
-                if result["detail"].get("status_code"):
-                    print(
-                        f'    Status: '
-                        f'{result["detail"]["status_code"]}'
-                    )
-
-                if result["detail"].get("server"):
-                    print(
-                        f'    Server: '
-                        f'{result["detail"]["server"]}'
-                    )
-
-                if result["detail"].get("title"):
-                    print(
-                        f'    Title: '
-                        f'{result["detail"]["title"]}'
-                    )
-
-        else:
-            print(f"[-] {result["host"]}:{result["port"]} not open")
+    print_result(results)
 
     end_time = time.perf_counter()
-    print(f"[*] Scan finished in {end_time - start_time:.2f} seconds")
+    logger.info(f"Scan finished in {end_time - start_time:.2f} seconds")
     #输出json
     if args.output:
         with open(args.output, "w", encoding="utf-8") as f:
