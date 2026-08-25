@@ -8,7 +8,7 @@ import ipaddress  #处理 IP 和网络地址
 import re #正则
 import html
 import ssl  # SSL/TLS模块
-
+import json 
 
 #常见服务字典
 COMMON_SERVICES = {
@@ -147,7 +147,6 @@ def parse_http_response(response):
 
 
     return {
-        "service": "http",
         "status_code": status_code,
         "server": server,
         "title": title
@@ -325,6 +324,11 @@ parser.add_argument(
     default=1.0,
     help="Connection timeout in seconds, default: 1.0"
 )
+parser.add_argument(
+    "-o",
+    "--output",
+    help="save result to json file"
+)
 
 args = parser.parse_args()
 try:
@@ -385,7 +389,7 @@ try:
             service_info = detect_service(result["host"], result["port"], timeout)
             result.update(service_info) #合并结果
 
-    # 打印
+    # 打印结果
     for result in results:
         if result["status"] == "open":
             print(f"[+] {result["host"]}:{result["port"]} "
@@ -416,7 +420,14 @@ try:
             print(f"[-] {result["host"]}:{result["port"]} not open")
 
     end_time = time.perf_counter()
-    print(f"[*]  Scan finished in {end_time - start_time:.2f} seconds")
+    print(f"[*] Scan finished in {end_time - start_time:.2f} seconds")
+    #输出json
+    if args.output:
+        with open(args.output, "w", encoding="utf-8") as f:
+            json.dump(results, f, indent=4, ensure_ascii=False)
+            #json.dump 将JSON 写入文件
+            #indent格式化输出，每层缩进4个空格 ensure_ascii保留中文等非ASCII字符,不要转义
+        print(f"[*] Result saved to {args.output}")
 
 except ValueError as e:
     print(f"[!] Invalid port input: {e}")
