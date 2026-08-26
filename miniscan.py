@@ -11,6 +11,8 @@ import ssl  # SSL/TLS模块
 import json 
 import logging
 
+from scanner import scan_port
+from server import detect_service
 
 #设置日志
 logging.basicConfig(
@@ -20,23 +22,7 @@ logging.basicConfig(
 logger = logging.getLogger("MiniScan") #创建日志器
 
 
-#常见服务字典
-COMMON_SERVICES = {
-    21: "ftp",
-    22: "ssh",
-    23: "telnet",
-    25: "smtp",
-    53: "dns",
-    80: "http",
-    110: "pop3",
-    143: "imap",
-    443: "https",
-    445: "smb",
-    3306: "mysql",
-    3389: "rdp",
-    5432: "postgresql",
-    6379: "redis",
-}
+
 
 #解析ip地址
 def parse_hosts(host_text):
@@ -51,30 +37,7 @@ def parse_hosts(host_text):
     ip = ipaddress.IPv4Address(host_text)
     return [str(ip)]
 
-#端口扫描
-def scan_port(host,port,timeout):
 
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM) 
-    #socket 模块的 socket 类，使用 IPv4 地址，TCP 协议
-    sock.settimeout(timeout) 
-    result = sock.connect_ex((host, port)) 
-    #尝试连接远程服务器 TCP三次握手,错误返回错误码
-    sock.close()
-
-    if result == 0:
-        return {
-            "host": host,
-            "port": port,
-            "status": "open",
-            "code": result
-        }
-
-    return {
-        "host": host,
-        "port": port,
-        "status": "not_open",
-        "code": result
-    }
             
 #端口解析
 def parse_ports(ports_text):
@@ -104,206 +67,6 @@ def parse_ports(ports_text):
             ports.append(port)
 
     return ports
-
-#识别常见服务
-def identify_service(port):
-    return COMMON_SERVICES.get(port, "unknown")
-
-# 获取服务类型
-def grab_banner(host, port, timeout):
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sock.settimeout(timeout)
-
-    try:
-        sock.connect((host,port))
-        banner = sock.recv(1024) #拿前1024字节数据
-        return banner.decode(
-            errors="ignore"
-        ).strip()
-    except (socket.timeout, OSError, ssl.SSLError):
-        return None
-
-    finally:
-        sock.close()
-
-# 解析http响应
-def parse_http_response(response):
-
-    lines = response.split("\r\n")
-    status_line = lines[0]
-
-    if not status_line.startswith("HTTP/"):
-        return None
-
-    parts = status_line.split()
-    status_code = int(parts[1])
-
-    server = None
-    for line in lines:
-        if line.lower().startswith("server:"):
-            server = line.split(":", 1)[1].strip()
-
-    title = None
-    match = re.search(
-        r"<title[^>]*>(.*?)</title>",
-        response,
-        re.IGNORECASE | re.DOTALL
-    )
-
-    if match:
-        title = match.group(1).strip()
-        title = " ".join(title.split())
-        title = html.unescape(title)
-
-
-    return {
-        "status_code": status_code,
-        "server": server,
-        "title": title
-    }
-
-#http探测
-def probe_http(host,port,timeout):
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sock.settimeout(timeout)
-
-    try:
-        sock.connect((host,port))
-        request = (
-            f"GET / HTTP/1.0\r\n"
-            f"Host: {host}\r\n"
-            f"\r\n"
-        )
-        sock.sendall(request.encode())
-        #拼接tcp字节流
-        chunks = []
-        while True:
-            data = sock.recv(4096)
-
-            if not data:
-                break
-            chunks.append(data)
-        response = b"".join(chunks).decode(errors="ignore")
-
-        return parse_http_response(response)
-
-    except (socket.timeout, OSError) :
-        return None
-
-    finally:
-        sock.close()
-
-#https探测
-def probe_https(host,port,timeout):
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sock.settimeout(timeout)
-
-    try:
-        sock.connect((host,port))
-        context = ssl.create_default_context()  #创建TLS配置
-        context.check_hostname = False  #不验证主机名
-        context.verify_mode = ssl.CERT_NONE #不验证证书
-
-        tls_sock = context.wrap_socket(sock, server_hostname=host)
-
-        request = (
-            f"GET / HTTP/1.0\r\n"
-            f"Host: {host}\r\n"
-            f"\r\n"
-        )
-
-        tls_sock.sendall(request.encode())
-        #拼接tcp字节流
-        chunks = []
-
-        while True:
-            data = tls_sock.recv(4096)
-
-            if not data:
-                break
-            chunks.append(data)
-        response = b"".join(chunks).decode(errors="ignore")
-        return parse_http_response(response)
-
-    except (socket.timeout, OSError) :
-        return None
-
-    finally:
-        sock.close()
-
-
-def detect_service(host, port, timeout):
-    #初步猜测
-    service_hint = identify_service(port)
-
-    #ssh
-    if service_hint == "ssh":
-        banner = grab_banner(host, port, timeout)
-        if banner:
-            if banner.startswith("SSH-"):
-                return {
-                    "service": "ssh",
-                    "banner": banner,
-                    "detail": {}
-                 }
-
-     #https
-    if service_hint == "https":
-        https_info = probe_https(host,port,timeout)
-        if https_info is not None:
-            return {
-                "service": "https",
-                "banner": None,
-                "detail": https_info
-            }
-
-     #http
-    if service_hint == "http":
-        http_info = probe_http(host, port, timeout)
-        if http_info is not None:
-            return {
-                        "service": "http",
-                        "banner": None,
-                        "detail": http_info
-                        }
-    
-    #非标准端口：->http ->https -> banner ->最初结果 做快速指纹探测
-   
-
-    http_info = probe_http(host, port, timeout)
-    if http_info is not None:
-        return {
-                    "service": "http",
-                    "banner": None,
-                    "detail": http_info
-                    }
-        
-    https_info = probe_https(
-        host,
-        port,
-        timeout
-    )
-    if https_info:
-        return {
-            "service": "https",
-            "banner": None,
-            "detail": https_info
-        }
-    
-    banner = grab_banner(host, port, timeout)
-    if banner and banner.startswith("SSH-"):
-        return{
-                "service": "ssh",
-                "banner": banner,
-                "detail": {}
-        }
-    
-    #全部失败 返回初始端口映射结果
-    return {
-        "service": service_hint,
-        "banner": banner,
-        "detail": {}
-    }
 
 def print_result(results):
     # 打印结果
