@@ -103,6 +103,20 @@ def print_result(results,open_only=False):
         else:
             print(f'[-] {result["host"]}:{result["port"]} not open')
 
+#端口汇总统计
+def print_summary(results):
+    total = len(results)
+    open_count = sum(
+        1 for result in results
+        if result["status"] == "open"
+    )
+    closed_count = total - open_count
+
+    print()
+    print(f"[*] Open ports : {open_count}")
+    print(f"[*] Closed     : {closed_count}")
+    print(f"[*] Total      : {total}")
+
 
 #输入
 parser = argparse.ArgumentParser( #创建参数解析器对象的构造函数
@@ -223,6 +237,7 @@ try:
             result.update(service_info) #合并结果
 
     print_result(results, open_only=open_only)
+    print_summary(results)
 
     end_time = time.perf_counter()
     logger.info(f"Scan finished in {end_time - start_time:.2f} seconds")
