@@ -68,12 +68,16 @@ def parse_ports(ports_text):
 
     return ports
 
-def print_result(results):
+def print_result(results,open_only=False):
     # 打印结果
     for result in results:
+
+        if open_only and result["status"] != "open":
+            continue
+
         if result["status"] == "open":
-            print(f"[+] {result["host"]}:{result["port"]} "
-                f"open {result["service"]}"
+            print(f'[+] {result["host"]}:{result["port"]} '
+                f'open {result["service"]}'
                 )
             if result["banner"]:
                 print(f'    Banner: {result["banner"]}')
@@ -97,7 +101,7 @@ def print_result(results):
                     )
 
         else:
-            print(f"[-] {result["host"]}:{result["port"]} not open")
+            print(f'[-] {result["host"]}:{result["port"]} not open')
 
 
 #输入
@@ -140,6 +144,11 @@ parser.add_argument(
     action="store_true",  # 动作类型：存储布尔值
     help="show detailed information"
 )
+parser.add_argument(
+    "--open",
+    action="store_true",
+    help="show only open ports"
+)
 
 args = parser.parse_args()
 if args.verbose :
@@ -155,6 +164,7 @@ ports_text = args.ports
 workers = args.threads
 timeout = args.timeout
 verbose = args.verbose
+open_only = args.open
 
 #输入检查
 if  workers < 1 or workers > 500:
@@ -212,7 +222,7 @@ try:
             service_info = detect_service(result["host"], result["port"], timeout)
             result.update(service_info) #合并结果
 
-    print_result(results)
+    print_result(results, open_only=open_only)
 
     end_time = time.perf_counter()
     logger.info(f"Scan finished in {end_time - start_time:.2f} seconds")
