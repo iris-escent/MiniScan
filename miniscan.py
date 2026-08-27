@@ -100,22 +100,50 @@ def print_result(results,open_only=False):
                         f'{result["detail"]["title"]}'
                     )
 
+        elif result["status"] == "closed":
+            print(
+                f"[-] {result['host']}:{result['port']} closed"
+            )
+        elif result["status"] == "timeout":
+            print(
+                f"[!] {result['host']}:{result['port']} timeout"
+            )
         else:
-            print(f'[-] {result["host"]}:{result["port"]} not open')
+            print(
+                f"[!] {result['host']}:{result['port']} error "
+                f"(code={result['code']})"
+    )
 
 #端口汇总统计
 def print_summary(results):
     total = len(results)
+
     open_count = sum(
         1 for result in results
         if result["status"] == "open"
     )
-    closed_count = total - open_count
+
+    closed_count = sum(
+        1 for result in results
+        if result["status"] == "closed"
+    )
+
+    timeout_count = sum(
+        1 for result in results
+        if result["status"] == "timeout"
+    )
+
+    error_count = sum(
+        1 for result in results
+        if result["status"] == "error"
+    )
 
     print()
-    print(f"[*] Open ports : {open_count}")
-    print(f"[*] Closed     : {closed_count}")
-    print(f"[*] Total      : {total}")
+    print(f"[*] Open    : {open_count}")
+    print(f"[*] Closed  : {closed_count}")
+    print(f"[*] Timeout : {timeout_count}")
+    print(f"[*] Error   : {error_count}")
+    print(f"[*] Total   : {total}")
 
 
 #输入
