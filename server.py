@@ -18,70 +18,93 @@ COMMON_SERVICES = {
     6379: "redis",
 }
 
+# 自建服务端口探测库
+HTTP_PORTS = {
+    80, 81, 3000, 5000,
+    8000, 8001, 8080, 8081, 8888
+}
+
+HTTPS_PORTS = {
+    443, 4443, 7443, 8443, 9443
+}
+
+
 #识别常见服务
 def identify_service(port):
     return COMMON_SERVICES.get(port, "unknown")
 
-def detect_service(host, port, timeout):
-    #初步猜测
-    service_hint = identify_service(port)
+#探测方法选择
+def select_probes(port):
+    if port in HTTPS_PORTS:
+        return ["https", "http"]
+    if port in HTTP_PORTS:
+        return ["http", "https"]
 
-     #https
-    if service_hint == "https":
-        https_info = probe_https(host,port,timeout)
-        if https_info is not None:
-            return {
-                "service": "https",
-                "banner": None,
-                "detail": https_info
-            }
+    return ["http", "https"]
 
-     #http
-    if service_hint == "http":
-        http_info = probe_http(host, port, timeout)
-        if http_info is not None:
-            return {
-                        "service": "http",
-                        "banner": None,
-                        "detail": http_info
-                        }
-    
-    #非标准端口：->http ->https -> banner ->最初结果 做快速指纹探测
-    http_info = probe_http(host, port, timeout)
-    if http_info is not None:
+# 调用对应探针+结果包装
+def run_probe(probe_name, host, port, timeout):
+    if probe_name == "http":
+        detail = probe_http(host, port, timeout)
+
+        if detail is None:
+            return None
+
         return {
-                    "service": "http",
-                    "banner": None,
-                    "detail": http_info
-                    }
-        
-    https_info = probe_https(
-        host,
-        port,
-        timeout
-    )
-    if https_info:
+            "service": "http",
+            "banner": None,
+            "detail": detail
+        }
+
+    if probe_name == "https":
+        detail = probe_https(host, port, timeout)
+
+        if detail is None:
+            return None
+
         return {
             "service": "https",
             "banner": None,
-            "detail": https_info
+            "detail": detail
         }
-    
+
+    raise ValueError(f"unknown probe: {probe_name}")
+
+
+
+def detect_service(host, port, timeout):
+    service_hint = identify_service(port)
+
+    # 始终先读取初始 Banner
     banner = grab_banner(host, port, timeout)
     banner_service = identify_banner_service(banner)
-    if banner_service:
+
+    if banner_service is not None:
         return {
             "service": banner_service,
             "banner": banner,
             "detail": {}
         }
-    
-    #全部失败 返回初始端口映射结果
+    # Banner未识别，再发送主动探针
+    for probe_name in select_probes(port):
+        result = run_probe(
+            probe_name,
+            host,
+            port,
+            timeout
+        )
+
+        if result is not None:
+            return result
+
+    # 所有探测失败，保留初始Banner
     return {
         "service": service_hint,
         "banner": banner,
         "detail": {}
     }
+
+
 
 # banner识别
 def identify_banner_service(banner):
@@ -91,19 +114,10 @@ def identify_banner_service(banner):
 
     banner_lower = banner.lower()
 
-    if "ftp" in banner_lower:
-        return "ftp"
-
-    if "smtp" in banner_lower:
-        return "smtp"
-
-    if "mysql" in banner_lower:
-        return "mysql"
-
-    if "redis" in banner_lower:
-        return "redis"
-
-    if banner.startswith("SSH-"):
-        return "ssh"
+    if "ftp" in banner_lower: return "ftp"
+    if "smtp" in banner_lower: return "smtp"
+    if "mysql" in banner_lower: return "mysql"
+    if "redis" in banner_lower: return "redis"
+    if banner.startswith("SSH-"): return "ssh"
 
     return None

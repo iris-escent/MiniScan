@@ -5,3 +5,5 @@ venv/
 .vscode/
 certs/
 result.json
+*参考.md
+
