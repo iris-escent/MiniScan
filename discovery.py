@@ -64,37 +64,7 @@ def ping_host(host, timeout):
         "error": error
     }
 
-# 并发探测多个主机
-def discover_hosts(hosts, workers, timeout):
-    if not hosts:
-        return []
 
-    worker_count = min(workers, len(hosts))
-    results = []
-
-    with ThreadPoolExecutor(
-        max_workers=worker_count
-    ) as executor:
-        futures = []
-
-        for host in hosts:
-            future = executor.submit(
-                ping_host,
-                host,
-                timeout
-            )
-            futures.append(future)
-
-        for future in as_completed(futures):
-            results.append(future.result())
-
-    results.sort(
-        key=lambda result: ipaddress.ip_address(
-            result["host"]
-        )
-    )
-
-    return results
 
 # TCP 补充存活探测
 def tcp_probe_host(host, timeout):
@@ -125,3 +95,59 @@ def tcp_probe_host(host, timeout):
         "code": last_code,
         "error": None
     }
+
+# 成功立刻停止
+def check_host_alive(host, timeout):
+    ping_result = ping_host(host, timeout)
+
+    if ping_result["status"] == "alive":
+        return ping_result
+
+    tcp_result = tcp_probe_host(host, timeout)
+
+    if tcp_result["status"] == "alive":
+        return tcp_result
+
+    return {
+        "host": host,
+        "status": "no_response",
+        "method": "icmp+tcp",
+        "code": tcp_result["code"],
+        "error": (
+            ping_result["error"]
+            if ping_result["status"] == "error"
+            else None
+        )
+    }
+
+# 并发探测多个主机
+def discover_hosts(hosts, workers, timeout):
+    if not hosts:
+        return []
+
+    worker_count = min(workers, len(hosts))
+    results = []
+
+    with ThreadPoolExecutor(
+        max_workers=worker_count
+    ) as executor:
+        futures = []
+
+        for host in hosts:
+            future = executor.submit(
+                check_host_alive,
+                host,
+                timeout
+            )
+            futures.append(future)
+
+        for future in as_completed(futures):
+            results.append(future.result())
+
+    results.sort(
+        key=lambda result: ipaddress.ip_address(
+            result["host"]
+        )
+    )
+
+    return results

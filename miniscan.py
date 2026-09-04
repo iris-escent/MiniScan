@@ -14,6 +14,7 @@ import logging
 from scanner import scan_port
 from server import detect_service
 from datetime import datetime 
+from discovery import discover_hosts
 
 #设置日志
 logging.basicConfig(
@@ -264,11 +265,9 @@ try:
     ports = parse_ports(ports_text)
 
     # 添加扫描摘要
-    total_tasks = len(hosts)*len(ports)
     logging.info("MiniScan starting...")
     logging.info(f"Targets : {len(hosts)}")
     logging.info(f"Ports   : {len(ports)}")
-    logging.info(f"Tasks   : {total_tasks}")
     logging.info(f"Threads : {workers}")
     logging.info(f"Timeout : {timeout}s")
     print()
@@ -276,11 +275,39 @@ try:
 
     start_time = time.perf_counter()  #获取时间戳，测试短时间内代码性能
 
+    #存活探测
+    host_results = discover_hosts(hosts, workers, timeout)
+
+    alive_hosts = [
+        result["host"]
+        for result in host_results
+        if result["status"] == "alive"
+    ]
+
+    no_response_hosts = [
+        result["host"]
+        for result in host_results
+        if result["status"] == "no_response"
+    ]
+
+    error_hosts = [
+        result["host"]
+        for result in host_results
+        if result["status"] == "error"
+    ]
+
+    logger.info(f"Alive   : {len(alive_hosts)}")
+    logger.info(f"No reply: {len(no_response_hosts)}")
+    logger.info(f"Errors  : {len(error_hosts)}")
+
+    total_tasks = len(alive_hosts) * len(ports)
+    logger.info(f"Tasks   : {total_tasks}")
+
     results = []
     with ThreadPoolExecutor(max_workers=workers) as executor:
         futures = []
         #提交任务
-        for host in hosts:
+        for host in alive_hosts:
             for port in ports:
                 logger.debug(
                    f"submit scan task {host}:{port}"
