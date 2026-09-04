@@ -13,6 +13,7 @@ import logging
 
 from scanner import scan_port
 from server import detect_service
+from datetime import datetime 
 
 #设置日志
 logging.basicConfig(
@@ -20,9 +21,6 @@ logging.basicConfig(
     format="%(levelname)s: %(message)s",  #设置日志格式
 )
 logger = logging.getLogger("MiniScan") #创建日志器
-
-
-
 
 #解析ip地址
 def parse_hosts(host_text):
@@ -37,8 +35,6 @@ def parse_hosts(host_text):
     ip = ipaddress.IPv4Address(host_text)
     return [str(ip)]
 
-
-            
 #端口解析
 def parse_ports(ports_text):
     ports = []
@@ -144,6 +140,56 @@ def print_summary(results):
     print(f"[*] Timeout : {timeout_count}")
     print(f"[*] Error   : {error_count}")
     print(f"[*] Total   : {total}")
+
+
+#输出结构化
+def build_report(results, hosts, ports, start_time, end_time):
+
+    services = [
+        r for r in results
+        if r["status"] == "open"
+    ]
+    report = {
+        "scan_time": datetime.now().strftime(
+            "%Y-%m-%d %H:%M:%S"
+        ),
+        "summary": {
+            "total_hosts": len(hosts),
+            "total_ports": len(ports),
+            "total_services": len(services)
+        },
+
+        "hosts": []
+    }
+    for host in hosts:
+        host_info = {
+            "host": host,
+            "ports": []
+        }
+        for result in services:
+            if result["host"] == host:
+                port_info = {
+                    "port": result["port"],
+                    "service": result.get(
+                        "service",
+                        "unknown"
+                    ),
+                }
+
+                if result.get("banner"):
+                    port_info["banner"] = result["banner"]
+
+                if result.get("detail"):
+                    port_info["detail"] = result["detail"]
+
+                host_info["ports"].append(
+                    port_info
+                )
+        report["hosts"].append(
+            host_info
+        )
+    return report
+
 
 
 #输入
@@ -268,11 +314,20 @@ try:
     print_summary(results)
 
     end_time = time.perf_counter()
+
+    report = build_report(
+    results,
+    hosts,
+    ports,
+    start_time,
+    end_time
+)
+    
     logger.info(f"Scan finished in {end_time - start_time:.2f} seconds")
     #输出json
     if args.output:
         with open(args.output, "w", encoding="utf-8") as f:
-            json.dump(results, f, indent=4, ensure_ascii=False)
+            json.dump(report, f, indent=4, ensure_ascii=False)
             #json.dump 将JSON 写入文件
             #indent格式化输出，每层缩进4个空格 ensure_ascii保留中文等非ASCII字符,不要转义
         print(f"[*] Result saved to {args.output}")
