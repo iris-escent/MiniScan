@@ -1,5 +1,6 @@
 import socket
 import errno
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 
 #端口扫描
 def scan_port(host,port,timeout):
@@ -31,3 +32,51 @@ def scan_port(host,port,timeout):
         "status": status,
         "code": result
     }
+
+# 有界批量调度
+def scan_ports(hosts, ports, workers, timeout, on_submit=None):
+    targets = (
+        (host, port)
+        for host in hosts
+        for port in ports
+    )
+    results = []
+    max_pending = max(1, workers * 2)
+
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        pending = set()
+
+        def submit_next():
+            try:
+                host, port = next(targets)
+            except StopIteration:
+                return False
+
+            if on_submit is not None:
+                on_submit(host, port)
+
+            pending.add(
+                executor.submit(
+                    scan_port,
+                    host,
+                    port,
+                    timeout
+                )
+            )
+            return True
+
+        for _ in range(max_pending):
+            if not submit_next():
+                break
+
+        while pending:
+            completed, pending = wait(
+                pending,
+                return_when=FIRST_COMPLETED
+            )
+
+            for future in completed:
+                results.append(future.result())
+                submit_next()
+
+    return results

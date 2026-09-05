@@ -2,7 +2,6 @@ import socket
 import errno
 import os
 import time #计时器
-from concurrent.futures import ThreadPoolExecutor, as_completed #高级并发模块-异步任务-线程池类
 import argparse #命令行参数解析
 import ipaddress  #处理 IP 和网络地址
 import re #正则
@@ -11,7 +10,7 @@ import ssl  # SSL/TLS模块
 import json 
 import logging
 
-from scanner import scan_port
+from scanner import scan_ports
 from server import detect_service
 from datetime import datetime 
 from discovery import discover_hosts
@@ -345,25 +344,15 @@ try:
     total_tasks = len(scan_hosts) * len(ports)
     logger.info(f"Tasks   : {total_tasks}")
 
-    results = []
-    with ThreadPoolExecutor(max_workers=workers) as executor:
-        futures = []
-        #提交任务
-        for host in scan_hosts:
-            for port in ports:
-                logger.debug(
-                   f"submit scan task {host}:{port}"
-                )
-                future = executor.submit(
-                    scan_port,
-                    host,
-                    port,
-                    timeout
-                ) #submit 把scan_portree任务交给executor
-                futures.append(future)
-        #收集结果
-        for future in as_completed(futures):
-            results.append(future.result())
+    results = scan_ports(
+        scan_hosts,
+        ports,
+        workers,
+        timeout,
+        on_submit=lambda host, port: logger.debug(
+            f"submit scan task {host}:{port}"
+        )
+    )
 
     # 排序
     results.sort(key=lambda x:(
