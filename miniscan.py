@@ -15,6 +15,7 @@ from scanner import scan_port
 from server import detect_service
 from datetime import datetime 
 from discovery import discover_hosts
+from port_groups import parse_ports
 
 #设置日志
 logging.basicConfig(
@@ -36,34 +37,51 @@ def parse_hosts(host_text):
     ip = ipaddress.IPv4Address(host_text)
     return [str(ip)]
 
-#端口解析
-def parse_ports(ports_text):
-    ports = []
-
-    for item in ports_text.split(","):
-        item = item.strip()
-
-        if not item:
+# 输出确认存活的主机
+def print_alive_hosts(host_results):
+    for result in host_results:
+        if result["status"] != "alive":
             continue
 
-        if "-" in item: # 扫描1-100
-            start, end = item.split("-")
-            start = int(start)
-            end = int(end)
-            if start > end : 
-                raise ValueError("start port cannot be greater than end port")
-            if start < 1 or end > 65535:
-                raise ValueError("port must be between 1 and 65535")
-            for port in range(start, end+1):
-                ports.append(port)
+        print(
+            f"[+] Host {result['host']} alive "
+            f"({result['method']})"
+        )
 
+
+def host_results_from_open_ports(hosts, results):
+    first_open_port = {}
+
+    for result in results:
+        if result["status"] == "open":
+            first_open_port.setdefault(
+                result["host"],
+                result["port"]
+            )
+
+    host_results = []
+    for host in hosts:
+        port = first_open_port.get(host)
+
+        if port is not None:
+            host_results.append({
+                "host": host,
+                "status": "alive",
+                "method": f"tcp/{port}",
+                "code": 0,
+                "error": None
+            })
         else:
-            port = int(item)
-            if port < 1 or port > 65535:
-                 raise ValueError("port must be between 1 and 65535")
-            ports.append(port)
+            host_results.append({
+                "host": host,
+                "status": "no_response",
+                "method": "port_scan",
+                "code": None,
+                "error": None
+            })
 
-    return ports
+    return host_results
+
 
 def print_result(results,open_only=False):
     # 打印结果
@@ -222,8 +240,11 @@ parser.add_argument(
 parser.add_argument(
     "-p",
     "--ports",
-    required=True,
-    help="Ports, e.g. 80,443 or 1-1000"
+    default="main",
+    help=(
+        "Ports or groups: common, web, db, service, main, all; "
+        "default: main"
+    )
 )
 parser.add_argument(
     "-t",
@@ -254,6 +275,11 @@ parser.add_argument(
     action="store_true",
     help="show only open ports"
 )
+parser.add_argument(
+    "--no-ping",
+    action="store_true",
+    help="skip host discovery and scan target ports directly"
+)
 
 args = parser.parse_args()
 if args.verbose :
@@ -270,6 +296,7 @@ workers = args.threads
 timeout = args.timeout
 verbose = args.verbose
 open_only = args.open
+no_ping = args.no_ping
 
 #输入检查
 if  workers < 1 or workers > 500:
@@ -292,38 +319,37 @@ try:
     start_time = time.perf_counter()  #获取时间戳，测试短时间内代码性能
 
     #存活探测
-    host_results = discover_hosts(hosts, workers, timeout)
+    if no_ping:
+        logger.info("Discovery: skipped")
+        scan_hosts = hosts
+        host_results = None
+    else:
+        host_results = discover_hosts(hosts, workers, timeout)
+        print_alive_hosts(host_results)
 
-    alive_hosts = [
-        result["host"]
-        for result in host_results
-        if result["status"] == "alive"
-    ]
+        scan_hosts = [
+            result["host"]
+            for result in host_results
+            if result["status"] == "alive"
+        ]
 
-    no_response_hosts = [
-        result["host"]
-        for result in host_results
-        if result["status"] == "no_response"
-    ]
+        no_response_hosts = [
+            result["host"]
+            for result in host_results
+            if result["status"] == "no_response"
+        ]
 
-    error_hosts = [
-        result["host"]
-        for result in host_results
-        if result["status"] == "error"
-    ]
+        logger.info(f"Alive   : {len(scan_hosts)}")
+        logger.info(f"No reply: {len(no_response_hosts)}")
 
-    logger.info(f"Alive   : {len(alive_hosts)}")
-    logger.info(f"No reply: {len(no_response_hosts)}")
-    logger.info(f"Errors  : {len(error_hosts)}")
-
-    total_tasks = len(alive_hosts) * len(ports)
+    total_tasks = len(scan_hosts) * len(ports)
     logger.info(f"Tasks   : {total_tasks}")
 
     results = []
     with ThreadPoolExecutor(max_workers=workers) as executor:
         futures = []
         #提交任务
-        for host in alive_hosts:
+        for host in scan_hosts:
             for port in ports:
                 logger.debug(
                    f"submit scan task {host}:{port}"
@@ -353,6 +379,20 @@ try:
             service_info = detect_service(result["host"], result["port"], timeout)
             result.update(service_info) #合并结果
 
+    if no_ping:
+        host_results = host_results_from_open_ports(
+            hosts,
+            results
+        )
+        print_alive_hosts(host_results)
+
+        alive_count = sum(
+            1 for result in host_results
+            if result["status"] == "alive"
+        )
+        logger.info(f"Alive   : {alive_count}")
+        logger.info(f"No asset: {len(hosts) - alive_count}")
+
     print_result(results, open_only=open_only)
     print_summary(results)
 
@@ -377,4 +417,3 @@ try:
 
 except ValueError as e:
     print(f"[!] Invalid port input: {e}")
-

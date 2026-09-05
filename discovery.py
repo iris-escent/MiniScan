@@ -79,7 +79,7 @@ def tcp_probe_host(host, timeout):
 
         last_code = result["code"]
 
-        if result["status"] in ("open", "closed"):
+        if result["status"] == "open":
             return {
                 "host": host,
                 "status": "alive",
