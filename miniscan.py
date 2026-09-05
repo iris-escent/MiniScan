@@ -144,27 +144,43 @@ def print_summary(results):
 
 
 #输出结构化
-def build_report(results, hosts, ports, start_time, end_time):
+def build_report(results, host_results, ports, start_time, end_time):
 
     services = [
         r for r in results
         if r["status"] == "open"
     ]
+    alive_results = [
+        result
+        for result in host_results
+        if result["status"] == "alive"
+    ]
+    no_response_count = sum(
+        1
+        for result in host_results
+        if result["status"] == "no_response"
+    )
     report = {
         "scan_time": datetime.now().strftime(
             "%Y-%m-%d %H:%M:%S"
         ),
+        "duration_seconds": round(end_time - start_time, 2),
         "summary": {
-            "total_hosts": len(hosts),
+            "total_hosts": len(host_results),
+            "alive_hosts": len(alive_results),
+            "no_response_hosts": no_response_count,
             "total_ports": len(ports),
             "total_services": len(services)
         },
 
         "hosts": []
     }
-    for host in hosts:
+    for host_result in alive_results:
+        host = host_result["host"]
         host_info = {
             "host": host,
+            "status": host_result["status"],
+            "method": host_result["method"], #icmp、tcp/80
             "ports": []
         }
         for result in services:
@@ -344,7 +360,7 @@ try:
 
     report = build_report(
     results,
-    hosts,
+    host_results,
     ports,
     start_time,
     end_time
