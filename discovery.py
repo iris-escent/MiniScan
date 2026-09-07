@@ -131,7 +131,7 @@ def discover_hosts(hosts, workers, timeout):
     with ThreadPoolExecutor(
         max_workers=worker_count
     ) as executor:
-        futures = []
+        futures = {}
 
         for host in hosts:
             future = executor.submit(
@@ -139,10 +139,23 @@ def discover_hosts(hosts, workers, timeout):
                 host,
                 timeout
             )
-            futures.append(future)
+            futures[future] = host
 
         for future in as_completed(futures):
-            results.append(future.result())
+            host = futures[future]
+
+            try:
+                result = future.result()
+            except Exception as exc:
+                result = {
+                    "host": host,
+                    "status": "error",
+                    "method": "discovery",
+                    "code": getattr(exc, "errno", None),
+                    "error": str(exc)
+                }
+
+            results.append(result)
 
     results.sort(
         key=lambda result: ipaddress.ip_address(

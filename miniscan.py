@@ -226,87 +226,89 @@ def build_report(results, host_results, ports, start_time, end_time):
 
 
 
-#输入
-parser = argparse.ArgumentParser( #创建参数解析器对象的构造函数
-    description="MiniScan - A lightweight TCP port scanner"
-)
-parser.add_argument(
-    "-H",
-    "--host",
-    required=True,
-    help="Target host"
-)
-parser.add_argument(
-    "-p",
-    "--ports",
-    default="main",
-    help=(
-        "Ports or groups: common, web, db, service, main, all; "
-        "default: main"
+def create_parser():
+    parser = argparse.ArgumentParser(
+        description="MiniScan - A lightweight TCP port scanner"
     )
-)
-parser.add_argument(
-    "-t",
-    "--threads",
-    type=int, #自动类型转化
-    default=50,
-    help="Number of worker threads, default: 50"
-)
-parser.add_argument(
-    "--timeout",
-    type=float, 
-    default=1.0,
-    help="Connection timeout in seconds, default: 1.0"
-)
-parser.add_argument(
-    "-o",
-    "--output",
-    help="save result to json file"
-)
-parser.add_argument(
-    "-v",
-    "--verbose", #控制输出信息的详细程度
-    action="store_true",  # 动作类型：存储布尔值
-    help="show detailed information"
-)
-parser.add_argument(
-    "--open",
-    action="store_true",
-    help="show only open ports"
-)
-parser.add_argument(
-    "--no-ping",
-    action="store_true",
-    help="skip host discovery and scan target ports directly"
-)
+    parser.add_argument(
+        "-H",
+        "--host",
+        required=True,
+        help="Target host"
+    )
+    parser.add_argument(
+        "-p",
+        "--ports",
+        default="main",
+        help=(
+            "Ports or groups: common, web, db, service, main, all; "
+            "default: main"
+        )
+    )
+    parser.add_argument(
+        "-t",
+        "--threads",
+        type=int,
+        default=50,
+        help="Number of worker threads, default: 50"
+    )
+    parser.add_argument(
+        "--timeout",
+        type=float,
+        default=1.0,
+        help="Connection timeout in seconds, default: 1.0"
+    )
+    parser.add_argument(
+        "-o",
+        "--output",
+        help="save result to json file"
+    )
+    parser.add_argument(
+        "-v",
+        "--verbose",
+        action="store_true",
+        help="show detailed information"
+    )
+    parser.add_argument(
+        "--open",
+        action="store_true",
+        help="show only open ports"
+    )
+    parser.add_argument(
+        "--no-ping",
+        action="store_true",
+        help="skip host discovery and scan target ports directly"
+    )
+    return parser
 
-args = parser.parse_args()
-if args.verbose :
-    logger.setLevel(logging.DEBUG)
-else:
-    logger.setLevel(logging.INFO)
 
-try:
-    hosts = parse_hosts(args.host)
-except ValueError as e:
-    parser.error(f"invalid host or CIDR: {e}")
-ports_text = args.ports
-workers = args.threads
-timeout = args.timeout
-verbose = args.verbose
-open_only = args.open
-no_ping = args.no_ping
+def main(argv=None):
+    parser = create_parser()
+    args = parser.parse_args(argv)
 
-#输入检查
-if  workers < 1 or workers > 500:
-    parser.error("threads must be between 1 and 500")
-if timeout <=0:
-    parser.error("timeout must be greater than 0")
+    if args.verbose:
+        logger.setLevel(logging.DEBUG)
+    else:
+        logger.setLevel(logging.INFO)
 
-try:
-    ports = parse_ports(ports_text)
+    try:
+        hosts = parse_hosts(args.host)
+    except ValueError as exc:
+        parser.error(f"invalid host or CIDR: {exc}")
 
-    # 添加扫描摘要
+    workers = args.threads
+    timeout = args.timeout
+
+    if workers < 1 or workers > 500:
+        parser.error("threads must be between 1 and 500")
+    if timeout <= 0:
+        parser.error("timeout must be greater than 0")
+
+    try:
+        ports = parse_ports(args.ports)
+    except ValueError as exc:
+        parser.error(f"invalid port input: {exc}")
+
     logging.info("MiniScan starting...")
     logging.info(f"Targets : {len(hosts)}")
     logging.info(f"Ports   : {len(ports)}")
@@ -314,11 +316,9 @@ try:
     logging.info(f"Timeout : {timeout}s")
     print()
 
+    start_time = time.perf_counter()
 
-    start_time = time.perf_counter()  #获取时间戳，测试短时间内代码性能
-
-    #存活探测
-    if no_ping:
+    if args.no_ping:
         logger.info("Discovery: skipped")
         scan_hosts = hosts
         host_results = None
@@ -331,7 +331,6 @@ try:
             for result in host_results
             if result["status"] == "alive"
         ]
-
         no_response_hosts = [
             result["host"]
             for result in host_results
@@ -354,25 +353,25 @@ try:
         )
     )
 
-    # 排序
-    results.sort(key=lambda x:(
-                ipaddress.ip_address(x["host"]),
-                 x["port"]
-                 ) )
-    # 补充info
+    results.sort(key=lambda result: (
+        ipaddress.ip_address(result["host"]),
+        result["port"]
+    ))
+
     for result in results:
         logger.debug(
             f"detect service {result['host']}:{result['port']}"
         )
         if result["status"] == "open":
-            service_info = detect_service(result["host"], result["port"], timeout)
-            result.update(service_info) #合并结果
+            service_info = detect_service(
+                result["host"],
+                result["port"],
+                timeout
+            )
+            result.update(service_info)
 
-    if no_ping:
-        host_results = host_results_from_open_ports(
-            hosts,
-            results
-        )
+    if args.no_ping:
+        host_results = host_results_from_open_ports(hosts, results)
         print_alive_hosts(host_results)
 
         alive_count = sum(
@@ -382,27 +381,27 @@ try:
         logger.info(f"Alive   : {alive_count}")
         logger.info(f"No asset: {len(hosts) - alive_count}")
 
-    print_result(results, open_only=open_only)
+    print_result(results, open_only=args.open)
     print_summary(results)
 
     end_time = time.perf_counter()
-
     report = build_report(
-    results,
-    host_results,
-    ports,
-    start_time,
-    end_time
-)
-    
+        results,
+        host_results,
+        ports,
+        start_time,
+        end_time
+    )
+
     logger.info(f"Scan finished in {end_time - start_time:.2f} seconds")
-    #输出json
+
     if args.output:
-        with open(args.output, "w", encoding="utf-8") as f:
-            json.dump(report, f, indent=4, ensure_ascii=False)
-            #json.dump 将JSON 写入文件
-            #indent格式化输出，每层缩进4个空格 ensure_ascii保留中文等非ASCII字符,不要转义
+        with open(args.output, "w", encoding="utf-8") as output_file:
+            json.dump(report, output_file, indent=4, ensure_ascii=False)
         print(f"[*] Result saved to {args.output}")
 
-except ValueError as e:
-    print(f"[!] Invalid port input: {e}")
+    return report
+
+
+if __name__ == "__main__":
+    main()

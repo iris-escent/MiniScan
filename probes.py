@@ -102,7 +102,14 @@ def parse_http_response(response):
         return None
 
     parts = status_line.split()
-    status_code = int(parts[1])
+
+    if len(parts) < 2:
+        return None
+
+    try:
+        status_code = int(parts[1])
+    except ValueError:
+        return None
 
     server = None
     for line in lines:
@@ -127,4 +134,3 @@ def parse_http_response(response):
         "server": server,
         "title": title
     }
-
