@@ -8,27 +8,27 @@ from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
 
-import miniscan
+import iscan
 
 
 class TargetParsingTests(unittest.TestCase):
     def test_single_host(self):
-        self.assertEqual(miniscan.parse_hosts("127.0.0.1"), ["127.0.0.1"])
+        self.assertEqual(iscan.parse_hosts("127.0.0.1"), ["127.0.0.1"])
 
     def test_cidr_hosts(self):
         self.assertEqual(
-            miniscan.parse_hosts("192.0.2.0/30"),
+            iscan.parse_hosts("192.0.2.0/30"),
             ["192.0.2.1", "192.0.2.2"]
         )
 
     def test_invalid_host(self):
         with self.assertRaises(ValueError):
-            miniscan.parse_hosts("not-an-ip")
+            iscan.parse_hosts("not-an-ip")
 
 
 class CommandLineTests(unittest.TestCase):
     def test_default_scan_options(self):
-        args = miniscan.create_parser().parse_args(["-H", "127.0.0.1"])
+        args = iscan.create_parser().parse_args(["-H", "127.0.0.1"])
 
         self.assertEqual(args.ports, "main")
         self.assertEqual(args.threads, 50)
@@ -46,7 +46,7 @@ class CommandLineTests(unittest.TestCase):
             with self.subTest(args=args):
                 with redirect_stdout(StringIO()), patch("sys.stderr", StringIO()):
                     with self.assertRaises(SystemExit) as raised:
-                        miniscan.main(args)
+                        iscan.main(args)
                 self.assertEqual(raised.exception.code, 2)
 
 
@@ -57,7 +57,7 @@ class HostResultTests(unittest.TestCase):
             {"host": "10.0.0.2", "port": 80, "status": "closed", "code": 111},
         ]
 
-        host_results = miniscan.host_results_from_open_ports(
+        host_results = iscan.host_results_from_open_ports(
             ["10.0.0.1", "10.0.0.2"],
             results
         )
@@ -68,7 +68,7 @@ class HostResultTests(unittest.TestCase):
 
 
 class ServiceDetectionBatchTests(unittest.TestCase):
-    @patch("miniscan.detect_service")
+    @patch("iscan.detect_service")
     def test_only_open_results_are_detected(self, detect_service):
         detect_service.return_value = {
             "service": "http",
@@ -80,14 +80,14 @@ class ServiceDetectionBatchTests(unittest.TestCase):
             {"host": "127.0.0.1", "port": 65534, "status": "closed"},
         ]
 
-        returned = miniscan.detect_services(results, 2, 0.5)
+        returned = iscan.detect_services(results, 2, 0.5)
 
         self.assertIs(returned, results)
         detect_service.assert_called_once_with("127.0.0.1", 8000, 0.5)
         self.assertEqual(results[0]["service"], "http")
         self.assertNotIn("service", results[1])
 
-    @patch("miniscan.detect_service")
+    @patch("iscan.detect_service")
     def test_service_detection_respects_worker_limit(self, detect_service):
         lock = threading.Lock()
         active = 0
@@ -109,17 +109,17 @@ class ServiceDetectionBatchTests(unittest.TestCase):
             for port in range(8000, 8006)
         ]
 
-        miniscan.detect_services(results, 2, 0.5)
+        iscan.detect_services(results, 2, 0.5)
 
         self.assertEqual(max_active, 2)
 
-    @patch("miniscan.detect_service", side_effect=RuntimeError("boom"))
+    @patch("iscan.detect_service", side_effect=RuntimeError("boom"))
     def test_service_exception_keeps_open_port_result(self, detect_service):
         results = [
             {"host": "127.0.0.1", "port": 22, "status": "open"},
         ]
 
-        miniscan.detect_services(results, 2, 0.5)
+        iscan.detect_services(results, 2, 0.5)
 
         self.assertEqual(results[0]["status"], "open")
         self.assertEqual(results[0]["service"], "ssh")
@@ -146,7 +146,7 @@ class ReportTests(unittest.TestCase):
             {"host": "10.0.0.1", "port": 23, "status": "closed", "code": 111},
         ]
 
-        report = miniscan.build_report(results, host_results, [22, 23], 10.0, 11.25)
+        report = iscan.build_report(results, host_results, [22, 23], 10.0, 11.25)
 
         self.assertEqual(report["summary"]["total_hosts"], 2)
         self.assertEqual(report["summary"]["alive_hosts"], 1)
@@ -155,9 +155,9 @@ class ReportTests(unittest.TestCase):
         self.assertEqual(len(report["hosts"]), 1)
         self.assertEqual(report["hosts"][0]["ports"][0]["service"], "ssh")
 
-    @patch("miniscan.detect_service")
-    @patch("miniscan.scan_ports")
-    @patch("miniscan.discover_hosts")
+    @patch("iscan.detect_service")
+    @patch("iscan.scan_ports")
+    @patch("iscan.discover_hosts")
     def test_no_ping_main_path_skips_discovery(
         self,
         discover_hosts,
@@ -174,7 +174,7 @@ class ReportTests(unittest.TestCase):
         }
 
         with redirect_stdout(StringIO()):
-            report = miniscan.main([
+            report = iscan.main([
                 "-H", "127.0.0.1", "-p", "80", "--no-ping", "--open"
             ])
 
@@ -182,9 +182,9 @@ class ReportTests(unittest.TestCase):
         self.assertEqual(report["summary"]["alive_hosts"], 1)
         self.assertEqual(report["summary"]["total_services"], 1)
 
-    @patch("miniscan.detect_service")
-    @patch("miniscan.scan_ports")
-    @patch("miniscan.discover_hosts")
+    @patch("iscan.detect_service")
+    @patch("iscan.scan_ports")
+    @patch("iscan.discover_hosts")
     def test_json_output_can_be_read_back(
         self,
         discover_hosts,
@@ -202,7 +202,7 @@ class ReportTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             output_path = Path(directory) / "result.json"
             with redirect_stdout(StringIO()):
-                miniscan.main([
+                iscan.main([
                     "-H", "127.0.0.1", "-p", "80", "-o", str(output_path)
                 ])
 

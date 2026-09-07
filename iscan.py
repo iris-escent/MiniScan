@@ -22,7 +22,7 @@ logging.basicConfig(
     level=logging.INFO, # 设置日志级别
     format="%(levelname)s: %(message)s",  #设置日志格式
 )
-logger = logging.getLogger("MiniScan") #创建日志器
+logger = logging.getLogger("iScan") #创建日志器
 
 #解析ip地址
 def parse_hosts(host_text):
@@ -286,7 +286,7 @@ def build_report(results, host_results, ports, start_time, end_time):
 
 def create_parser():
     parser = argparse.ArgumentParser(
-        description="MiniScan - A lightweight TCP port scanner"
+        description="iScan - A lightweight TCP port scanner"
     )
     parser.add_argument(
         "-H",
@@ -367,7 +367,7 @@ def main(argv=None):
     except ValueError as exc:
         parser.error(f"invalid port input: {exc}")
 
-    logging.info("MiniScan starting...")
+    logging.info("iScan starting...")
     logging.info(f"Targets : {len(hosts)}")
     logging.info(f"Ports   : {len(ports)}")
     logging.info(f"Threads : {workers}")
