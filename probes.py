@@ -3,6 +3,35 @@ import ssl
 import re
 import html
 
+
+def sanitize_banner(banner, max_length=256):
+    if banner is None:
+        return None
+
+    escaped = []
+    escape_sequences = {
+        "\n": r"\n",
+        "\r": r"\r",
+        "\t": r"\t",
+    }
+
+    for character in banner[:max_length]:
+        if character in escape_sequences:
+            escaped.append(escape_sequences[character])
+        elif character.isprintable():
+            escaped.append(character)
+        else:
+            code = ord(character)
+            if code <= 0xff:
+                escaped.append(f"\\x{code:02x}")
+            else:
+                escaped.append(f"\\u{code:04x}")
+
+    if len(banner) > max_length:
+        escaped.append("...")
+
+    return "".join(escaped)
+
 # 获取服务类型
 def grab_banner(host, port, timeout):
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -88,6 +117,26 @@ def probe_https(host,port,timeout):
     except (socket.timeout, OSError) :
         return None
 
+    finally:
+        sock.close()
+
+
+# Redis 主动探测
+def probe_redis(host, port, timeout):
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.settimeout(timeout)
+
+    try:
+        sock.connect((host, port))
+        sock.sendall(b"PING\r\n")
+        response = sock.recv(512).decode(errors="ignore").strip()
+
+        if response.startswith(("+PONG", "-NOAUTH", "-NOPERM", "-ERR")):
+            return response
+
+        return None
+    except (socket.timeout, OSError):
+        return None
     finally:
         sock.close()
 

@@ -1,5 +1,7 @@
 import json
 import tempfile
+import threading
+import time
 import unittest
 from contextlib import redirect_stdout
 from io import StringIO
@@ -63,6 +65,65 @@ class HostResultTests(unittest.TestCase):
         self.assertEqual(host_results[0]["status"], "alive")
         self.assertEqual(host_results[0]["method"], "tcp/80")
         self.assertEqual(host_results[1]["status"], "no_response")
+
+
+class ServiceDetectionBatchTests(unittest.TestCase):
+    @patch("miniscan.detect_service")
+    def test_only_open_results_are_detected(self, detect_service):
+        detect_service.return_value = {
+            "service": "http",
+            "banner": None,
+            "detail": {"status_code": 200},
+        }
+        results = [
+            {"host": "127.0.0.1", "port": 8000, "status": "open"},
+            {"host": "127.0.0.1", "port": 65534, "status": "closed"},
+        ]
+
+        returned = miniscan.detect_services(results, 2, 0.5)
+
+        self.assertIs(returned, results)
+        detect_service.assert_called_once_with("127.0.0.1", 8000, 0.5)
+        self.assertEqual(results[0]["service"], "http")
+        self.assertNotIn("service", results[1])
+
+    @patch("miniscan.detect_service")
+    def test_service_detection_respects_worker_limit(self, detect_service):
+        lock = threading.Lock()
+        active = 0
+        max_active = 0
+
+        def fake_detect_service(host, port, timeout):
+            nonlocal active, max_active
+            with lock:
+                active += 1
+                max_active = max(max_active, active)
+            time.sleep(0.03)
+            with lock:
+                active -= 1
+            return {"service": "unknown", "banner": None, "detail": {}}
+
+        detect_service.side_effect = fake_detect_service
+        results = [
+            {"host": "127.0.0.1", "port": port, "status": "open"}
+            for port in range(8000, 8006)
+        ]
+
+        miniscan.detect_services(results, 2, 0.5)
+
+        self.assertEqual(max_active, 2)
+
+    @patch("miniscan.detect_service", side_effect=RuntimeError("boom"))
+    def test_service_exception_keeps_open_port_result(self, detect_service):
+        results = [
+            {"host": "127.0.0.1", "port": 22, "status": "open"},
+        ]
+
+        miniscan.detect_services(results, 2, 0.5)
+
+        self.assertEqual(results[0]["status"], "open")
+        self.assertEqual(results[0]["service"], "ssh")
+        self.assertEqual(results[0]["service_error"], "boom")
 
 
 class ReportTests(unittest.TestCase):

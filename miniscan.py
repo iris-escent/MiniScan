@@ -9,9 +9,10 @@ import html
 import ssl  # SSL/TLS模块
 import json 
 import logging
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 
 from scanner import scan_ports
-from server import detect_service
+from server import detect_service, identify_service
 from datetime import datetime 
 from discovery import discover_hosts
 from port_groups import parse_ports
@@ -80,6 +81,63 @@ def host_results_from_open_ports(hosts, results):
             })
 
     return host_results
+
+
+def detect_services(results, workers, timeout, on_submit=None):
+    open_results = iter(
+        result for result in results
+        if result["status"] == "open"
+    )
+    max_pending = max(1, workers * 2)
+
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        pending = {}
+
+        def submit_next():
+            try:
+                result = next(open_results)
+            except StopIteration:
+                return False
+
+            if on_submit is not None:
+                on_submit(result["host"], result["port"])
+
+            future = executor.submit(
+                detect_service,
+                result["host"],
+                result["port"],
+                timeout
+            )
+            pending[future] = result
+            return True
+
+        for _ in range(max_pending):
+            if not submit_next():
+                break
+
+        while pending:
+            completed, _ = wait(
+                pending,
+                return_when=FIRST_COMPLETED
+            )
+
+            for future in completed:
+                result = pending.pop(future)
+
+                try:
+                    service_info = future.result()
+                except Exception as exc:
+                    service_info = {
+                        "service": identify_service(result["port"]),
+                        "banner": None,
+                        "detail": {},
+                        "service_error": str(exc)
+                    }
+
+                result.update(service_info)
+                submit_next()
+
+    return results
 
 
 def print_result(results,open_only=False):
@@ -358,17 +416,14 @@ def main(argv=None):
         result["port"]
     ))
 
-    for result in results:
-        logger.debug(
-            f"detect service {result['host']}:{result['port']}"
+    detect_services(
+        results,
+        workers,
+        timeout,
+        on_submit=lambda host, port: logger.debug(
+            f"detect service {host}:{port}"
         )
-        if result["status"] == "open":
-            service_info = detect_service(
-                result["host"],
-                result["port"],
-                timeout
-            )
-            result.update(service_info)
+    )
 
     if args.no_ping:
         host_results = host_results_from_open_ports(hosts, results)

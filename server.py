@@ -1,4 +1,10 @@
-from probes import grab_banner, probe_http, probe_https
+from probes import (
+    grab_banner,
+    probe_http,
+    probe_https,
+    probe_redis,
+    sanitize_banner,
+)
 
 #常见服务字典
 COMMON_SERVICES = {
@@ -28,6 +34,8 @@ HTTPS_PORTS = {
     443, 4443, 7443, 8443, 9443
 }
 
+REDIS_PORTS = {6379}
+
 
 #识别常见服务
 def identify_service(port):
@@ -35,6 +43,8 @@ def identify_service(port):
 
 #探测方法选择
 def select_probes(port):
+    if port in REDIS_PORTS:
+        return ["redis"]
     if port in HTTPS_PORTS:
         return ["https", "http"]
     if port in HTTP_PORTS:
@@ -68,12 +78,37 @@ def run_probe(probe_name, host, port, timeout):
             "detail": detail
         }
 
+    if probe_name == "redis":
+        banner = probe_redis(host, port, timeout)
+
+        if banner is None:
+            return None
+
+        return {
+            "service": "redis",
+            "banner": sanitize_banner(banner),
+            "detail": {}
+        }
+
     raise ValueError(f"unknown probe: {probe_name}")
 
 
 
 def detect_service(host, port, timeout):
     service_hint = identify_service(port)
+    probe_names = select_probes(port)
+
+    # Redis 属于客户端先发命令的协议，优先发送 PING。
+    if port in REDIS_PORTS:
+        result = run_probe("redis", host, port, timeout)
+
+        if result is not None:
+            return result
+
+        probe_names = [
+            name for name in probe_names
+            if name != "redis"
+        ]
 
     # 始终先读取初始 Banner
     banner = grab_banner(host, port, timeout)
@@ -82,11 +117,11 @@ def detect_service(host, port, timeout):
     if banner_service is not None:
         return {
             "service": banner_service,
-            "banner": banner,
+            "banner": sanitize_banner(banner),
             "detail": {}
         }
     # Banner未识别，再发送主动探针
-    for probe_name in select_probes(port):
+    for probe_name in probe_names:
         result = run_probe(
             probe_name,
             host,
@@ -100,7 +135,7 @@ def detect_service(host, port, timeout):
     # 所有探测失败，保留初始Banner
     return {
         "service": service_hint,
-        "banner": banner,
+        "banner": sanitize_banner(banner),
         "detail": {}
     }
 
@@ -117,6 +152,7 @@ def identify_banner_service(banner):
     if "ftp" in banner_lower: return "ftp"
     if "smtp" in banner_lower: return "smtp"
     if "mysql" in banner_lower: return "mysql"
+    if "caching_sha2_password" in banner_lower: return "mysql"
     if "redis" in banner_lower: return "redis"
     if banner.startswith("SSH-"): return "ssh"
 
